@@ -1,0 +1,20 @@
+# Virtual environment
+.venv/
+
+# Python compiled files
+__pycache__/
+*.pyc
+*.ipynb_checkpoints/ # Jupyter notebook checkpoints
+
+# IDE files (e.g., VS Code)
+.vscode/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Data files (if you don't want to commit large or sensitive data)
+data/
+
+# Environment variables files
+.env
