@@ -1,0 +1,3 @@
+fastavro
+pandas
+pyarrow
