@@ -47,7 +47,7 @@ Use case 5:
 # Get the storage account key
 account_key=$(az storage account keys list \
   --resource-group rx \
-  --account-name rxstorageac \
+  --account-name rxstorageac1 \
   --query '[0].value' -o tsv)
 
 # Upload the CSV
@@ -57,3 +57,26 @@ az storage blob upload \
   --container-name input \
   --file /path/to/your.csv \
   --name your.csv
+
+# Get username of the account
+ az account show --query "user.name" --output tsv
+
+Use case 6: 
+1. load a file to blob container
+2. This triggers a azure function
+3. Function takes the bloab and processes it
+4. Is loaded to another container
+
+
+# detailed steps for use case 6
+# 1. Create the containers:
+az storage container create --account-name rxstorageac1 --name input
+az storage container create --account-name rxstorageac1 --name output
+
+# 2. Install Azure function core tools so that commands like "func" work
+
+# 3. Create a Python Azure Function Project
+func init file-processor-func --python
+
+# 4. Go to the Azure function project folder named "file-processor-func" and create a function triggered by blob
+func new --name process_file --template "Azure Blob Storage trigger" --authlevel "function"
