@@ -1,8 +1,10 @@
 import azure.functions as func
 from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
+from azure.data.tables import TableServiceClient # Import for Azure Table Storage
 from datetime import datetime, timedelta
 import os
 import logging
+import json # Import for JSON serialization of custom metadata
 
 # Define the app instance for the Azure Functions Python V2 programming model
 app = func.FunctionApp()
@@ -13,7 +15,8 @@ app = func.FunctionApp()
 SOURCE_CONTAINER_NAME = os.environ.get("SOURCE_CONTAINER_NAME", "input") # Default to 'input' if not set
 TARGET_CONTAINER_NAME = os.environ.get("TARGET_CONTAINER_NAME", "output") # Default to 'output' if not set
 LAST_SCAN_TIMESTAMP_BLOB_NAME = os.environ.get("LAST_SCAN_TIMESTAMP_BLOB_NAME", "last_scan_timestamp.txt") # Default filename for the timestamp blob
-METADATA_CONTAINER_NAME = os.environ.get("METADATA_CONTAINER_NAME", "function-metadata") # Container dedicated to storing metadata like the timestamp blob
+METADATA_CONTAINER_NAME = os.environ.get("METADATA_CONTAINER_NAME", "function-metadata") # Container dedicated to storing timestamp blob
+TABLE_NAME = os.environ.get("TABLE_NAME", "BlobMetadataTable") # Name of the Azure Table to store metadata
 
 # Register the function with the app instance and define its trigger
 @app.function_name(name="BlobScannerFunction") # Logical name for this function within the app
@@ -22,7 +25,8 @@ def blob_scanner_function(myTimer: func.TimerRequest):
     """
     This Azure Function scans a specified source container for blobs
     that have been uploaded or modified since the last scan and copies them
-    to a target container.
+    to a target container. It also extracts metadata from new/modified files
+    and appends it to an Azure Table Storage.
     """
     
     # Capture the current UTC time when the function starts.
@@ -36,6 +40,10 @@ def blob_scanner_function(myTimer: func.TimerRequest):
     
     # Initialize the BlobServiceClient to interact with the Azure Blob Storage account.
     blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+    
+    # Initialize the TableServiceClient to interact with Azure Table Storage.
+    table_service_client = TableServiceClient.from_connection_string(connection_string)
+    table_client = None # Initialize table_client to None
 
     # Initialize last_scan_time to the minimum possible datetime.
     # This ensures that on the very first run (when no timestamp blob exists),
@@ -84,7 +92,7 @@ def blob_scanner_function(myTimer: func.TimerRequest):
         logging.error(f"Error retrieving last scan timestamp: {e}")
         last_scan_time = datetime.min # Fallback to min time to ensure all files are scanned
 
-    # --- 2. Get Container Clients for Source and Target ---
+    # --- 2. Get Container Clients for Source and Target & Initialize Table Client ---
     # Get clients for the source and target blob containers.
     source_container_client = blob_service_client.get_container_client(SOURCE_CONTAINER_NAME)
     target_container_client = blob_service_client.get_container_client(TARGET_CONTAINER_NAME)
@@ -96,43 +104,79 @@ def blob_scanner_function(myTimer: func.TimerRequest):
     except Exception as e:
         if "ContainerAlreadyExists" not in str(e): 
             logging.warning(f"Failed to create target container (might already exist): {e}")
+            
+    # Get client for the metadata table and attempt to create it
+    try:
+        table_client = table_service_client.get_table_client(table_name=TABLE_NAME)
+        table_client.create_table()
+        logging.info(f"Created Azure Table: {TABLE_NAME}")
+    except Exception as e:
+        if "TableAlreadyExists" not in str(e): # Ignore if it already exists
+            logging.warning(f"Failed to create Azure Table (might already exist): {e}")
+        else:
+            logging.info(f"Azure Table '{TABLE_NAME}' already exists.")
+
 
     copied_count = 0 # Initialize a counter for successfully copied files
+    metadata_processed_count = 0 # Initialize a counter for processed metadata entries
 
-    # --- 3. List Blobs in Source Container and Copy New/Modified Files ---
+    # --- 3. List Blobs in Source Container, Copy New/Modified Files, and Store Metadata ---
     # This block iterates through all blobs in the source container
     try:
         for blob_item in source_container_client.list_blobs():
             # Check if the blob's last modified time is newer than the last scan time.
             # We use 'last_modified' as it reflects uploads and updates.
             if blob_item.last_modified and blob_item.last_modified > last_scan_time:
-                # Get blob clients for both the source and target blobs.
-                # blob_item.name gives the full blob path (e.g., 'folder/file.txt').
+                # --- Copy Blob (Existing Logic) ---
                 source_blob_client = source_container_client.get_blob_client(blob_item.name)
                 target_blob_client = target_container_client.get_blob_client(blob_item.name)
 
-                # Generate a Shared Access Signature (SAS) token for the source blob.
-                # This SAS token grants temporary read access to the source blob's URL,
-                # which is required by the 'start_copy_from_url' operation.
-                # IMPORTANT: This assumes the BlobServiceClient was initialized with an account key.
-                # For enhanced security in production, consider Azure Managed Identities.
                 source_blob_sas_url = source_blob_client.url + "?" + generate_blob_sas(
                     account_name=blob_service_client.account_name,
                     container_name=source_container_client.container_name,
                     blob_name=blob_item.name,
-                    account_key=blob_service_client.credential.account_key, # Access the account key from the client's credential
-                    permission=BlobSasPermissions(read=True), # Grant read permission
-                    expiry=utc_now + timedelta(hours=1) # SAS token valid for 1 hour from now
+                    account_key=blob_service_client.credential.account_key, 
+                    permission=BlobSasPermissions(read=True), 
+                    expiry=utc_now + timedelta(hours=1) 
                 )
 
                 logging.info(f"Copying '{blob_item.name}' (Last Modified: {blob_item.last_modified.isoformat()})...")
-                
-                # Initiate the asynchronous copy operation from the source blob's SAS URL to the target blob.
                 copy_result = target_blob_client.start_copy_from_url(source_blob_sas_url)
-                
-                # In a more robust application, you might add logic here to poll
-                # copy_result.status or copy_result.id to ensure the copy completes successfully.
                 copied_count += 1
+
+                # --- Extract and Store Metadata ---
+                if table_client: # Ensure table_client was successfully initialized
+                    try:
+                        # Construct the entity for Azure Table Storage
+                        # PartitionKey and RowKey are mandatory
+                        # RowKey should be unique within a PartitionKey
+                        entity = {
+                            "PartitionKey": SOURCE_CONTAINER_NAME, # Using source container name as PartitionKey
+                            "RowKey": blob_item.name.replace("/", "---"), # Blob name as RowKey, replace '/' for validity
+                            "BlobName": blob_item.name,
+                            "BlobSize": blob_item.size,
+                            "LastModified": blob_item.last_modified.isoformat() if blob_item.last_modified else None,
+                            "CreationTime": blob_item.creation_time.isoformat() if blob_item.creation_time else None,
+                            "ETag": blob_item.etag,
+                            "BlobType": str(blob_item.blob_type), # Convert enum to string
+                            "ContentType": blob_item.content_settings.content_type if blob_item.content_settings else None,
+                            "ContentMD5": blob_item.content_settings.content_md5 if blob_item.content_settings else None,
+                            "ContentEncoding": blob_item.content_settings.content_encoding if blob_item.content_settings else None,
+                            "ContentDisposition": blob_item.content_settings.content_disposition if blob_item.content_settings else None,
+                            "ContentLanguage": blob_item.content_settings.content_language if blob_item.content_settings else None,
+                            "CacheControl": blob_item.content_settings.cache_control if blob_item.content_settings else None,
+                            "CustomMetadata": json.dumps(blob_item.metadata) if blob_item.metadata else "{}" # Serialize custom metadata dictionary to JSON string
+                        }
+                        
+                        # Upsert the entity: inserts if not exists, updates if exists.
+                        table_client.upsert_entity(entity=entity)
+                        metadata_processed_count += 1
+                        logging.info(f"Metadata for '{blob_item.name}' upserted to Azure Table '{TABLE_NAME}'.")
+
+                    except Exception as table_e:
+                        logging.error(f"Error processing metadata for '{blob_item.name}': {table_e}")
+                else:
+                    logging.warning(f"Table client not initialized. Skipping metadata storage for '{blob_item.name}'.")
             else:
                 logging.info(f"Skipping '{blob_item.name}' (Last Modified: {blob_item.last_modified.isoformat()}) - not newer than last scan time.")
 
@@ -147,7 +191,7 @@ def blob_scanner_function(myTimer: func.TimerRequest):
         new_scan_time = utc_now 
         # Upload the current UTC time (in ISO format) to the timestamp blob, overwriting previous value.
         timestamp_blob_client.upload_blob(new_scan_time.isoformat(), overwrite=True)
-        logging.info(f"Updated last scan time to: {new_scan_time.isoformat()}. Copied {copied_count} new files.")
+        logging.info(f"Updated last scan time to: {new_scan_time.isoformat()}. Copied {copied_count} new files. Processed {metadata_processed_count} metadata entries.")
     except Exception as e:
         # Catch and log any errors during the timestamp update.
         logging.error(f"Error updating last scan timestamp: {e}")

@@ -1,3 +1,10 @@
 fastavro
 pandas
 pyarrow
+azure-eventhub
+azure-functions
+azure-storage-blob
+flask 
+apache-airflow 
+apache-beam>=2.61.0
+cloudpickle>=3.0.0
