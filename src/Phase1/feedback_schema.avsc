@@ -1,0 +1,16 @@
+{
+  "type": "record",
+  "name": "IphoneFeedback",
+  "fields": [
+    { "name": "review_id", "type": "string" },
+    { "name": "product_asin", "type": "string" },
+    { "name": "variant_asin", "type": "string" },
+    { "name": "country", "type": "string" },
+    { "name": "review_title", "type": "string" },
+    { "name": "review_description", "type": "string" },
+    { "name": "rating_score", "type": "int" },
+    { "name": "is_verified", "type": "boolean" },
+    { "name": "review_date", "type": "string" },
+    { "name": "timestamp", "type": "string" }
+  ]
+}
