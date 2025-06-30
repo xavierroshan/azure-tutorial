@@ -21,13 +21,7 @@ az eventhubs namespace authorization-rule keys list \
     -- Keeping here itself :)
 
 
-{
-  "keyName": "RootManageSharedAccessKey",
-  "primaryConnectionString": "Endpoint=sb://feedbacknamespace.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=QgUpS19pIkJ6ORjAIlPSEAuwmrU4VCANp+AEhDR4X3Y=",
-  "primaryKey": "QgUpS19pIkJ6ORjAIlPSEAuwmrU4VCANp+AEhDR4X3Y=",
-  "secondaryConnectionString": "Endpoint=sb://feedbacknamespace.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=B9u+vOtTdaHzSEPxzB04TvLV8RrKlhuTa+AEhMS5rI8=",
-  "secondaryKey": "B9u+vOtTdaHzSEPxzB04TvLV8RrKlhuTa+AEhMS5rI8="
-}
+
 
 Step 2: Prepare the Avro Schema
 Create a file called iphone_feedback_schema.avsc:
