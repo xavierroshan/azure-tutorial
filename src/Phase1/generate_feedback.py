@@ -16,7 +16,7 @@ with open("feedback_schema.avsc", "r") as f:
 df = pd.read_csv("iphone.csv")
 
 # Initialize Event Hub
-CONNECTION_STR = "Endpoint=sb://feedbacknamespace.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=QgUpS19pIkJ6ORjAIlPSEAuwmrU4VCANp+AEhDR4X3Y="
+CONNECTION_STR = "add connection string"
 EVENT_HUB_NAME = "FeedbackHub"
 producer = EventHubProducerClient.from_connection_string(conn_str=CONNECTION_STR, eventhub_name=EVENT_HUB_NAME)
 
